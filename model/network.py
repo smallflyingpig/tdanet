@@ -1429,8 +1429,9 @@ class TextualResGenerator(nn.Module):
 class CondLogit(nn.Module):
     def __init__(self, in_nc, cond_nc):
         super(CondLogit, self).__init__()
+        kwargs = {'kernel_size': 3, 'stride': 1, 'padding': 1}
         self.conv = nn.Sequential(
-            nn.Conv2d(in_nc+cond_nc, in_nc, 3,1,1, bias=False), 
+            coord_conv(in_nc+cond_nc, in_nc, use_spect=False, use_coord=True, **kwargs),
             nn.BatchNorm2d(in_nc),
             nn.ReLU(inplace=True))
         self.out = SpectralNorm(nn.Conv2d(in_nc, 1, 4,1,0, bias=True))
