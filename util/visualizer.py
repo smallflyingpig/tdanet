@@ -142,7 +142,7 @@ class Visualizer():
         for k, v in errors.items():
             message += '%s: %.3f ' % (k, v)
 
-        print(message)
+        print(message, flush=True)
         with open(self.log_name, "a") as log_file:
             log_file.write('%s\n' % message)
 

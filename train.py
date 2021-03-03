@@ -10,7 +10,7 @@ if __name__ == '__main__':
     # create a dataset
     dataset = dataloader(opt)
     dataset_size = len(dataset) * opt.batchSize
-    print('training images = %d' % dataset_size)
+    print('training images = %d' % dataset_size, flush=True)
     # create a model
     model = create_model(opt)
     # create a visualizer
@@ -35,7 +35,7 @@ if __name__ == '__main__':
             model.optimize_parameters()
 
             # display images on visdom and save images
-            if total_iteration % opt.display_freq == 0:
+            if opt.display_id > 0 and total_iteration % opt.display_freq == 0:
                 visualizer.display_current_results(model.get_current_visuals(), model.get_current_text(), epoch)
                 visualizer.plot_current_distribution(model.get_current_dis())
 
