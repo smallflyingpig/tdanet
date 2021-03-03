@@ -2,8 +2,10 @@ import numpy as np
 import os
 import imageio
 import torch
-
+import nltk
+nltk.download('punkt')
 from nltk.tokenize import word_tokenize
+
 
 def idx_to_caption(ixtoword, caption, length):
     """ Turn idx to word"""
