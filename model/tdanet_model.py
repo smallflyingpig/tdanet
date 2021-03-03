@@ -56,8 +56,8 @@ class TDAnet(BaseModel):
         self.net_G = network.define_hidden_textual_g(f_text_dim=768, ngf=32, z_nc=256, img_f=256, L=0, layers=5, output_scale=opt.output_scale,
                                       norm='instance', activation='LeakyReLU', init_type='orthogonal', gpu_ids=opt.gpu_ids)
         # define the discriminator model
-        self.net_D = network.define_d(ndf=32, img_f=128, layers=5, model_type='ResDis', init_type='orthogonal', gpu_ids=opt.gpu_ids)
-        self.net_D_rec = network.define_d(ndf=32, img_f=128, layers=5, model_type='ResDis', init_type='orthogonal', gpu_ids=opt.gpu_ids)
+        self.net_D = network.define_d(ndf=32, img_f=128, layers=5, c_dim=256, model_type='ResDis', init_type='orthogonal', gpu_ids=opt.gpu_ids)
+        self.net_D_rec = network.define_d(ndf=32, img_f=128, layers=5, c_dim=256, model_type='ResDis', init_type='orthogonal', gpu_ids=opt.gpu_ids)
 
         text_config = TextConfig(opt.text_config)
         self._init_language_model(text_config)
@@ -227,13 +227,23 @@ class TDAnet(BaseModel):
     def backward_D_basic(self, netD, real, fake):
         """Calculate GAN loss for the discriminator"""
         # Real
-        D_real = netD(real)
+        D_real_feat = netD(real)
+        D_real = netD.module.get_uncond_pred(D_real_feat)
+        D_real_cond = netD.module.get_cond_pred(D_real_feat, self.sentence_embedding)
+        D_real_cond_wrong = netD.module.get_cond_pred(D_real_feat[:-1], self.sentence_embedding[1:])
+
         D_real_loss = self.GANloss(D_real, True, True)
+        D_real_loss_cond = self.GANloss(D_real_cond, True, True)
+        D_real_loss_cond_wrong = self.GANloss(D_real_cond, False, True)
         # fake
-        D_fake = netD(fake.detach())
+        D_fake_feat = netD(fake.detach())
+        D_fake = netD.module.get_uncond_pred(D_fake_feat)
+        D_fake_cond = netD.module.get_cond_pred(D_fake_feat, self.sentence_embedding)
         D_fake_loss = self.GANloss(D_fake, False, True)
+        D_fake_loss_cond = self.GANloss(D_fake_cond, False, True)
         # loss for discriminator
-        D_loss = (D_real_loss + D_fake_loss) * 0.5
+        D_loss = (D_real_loss + D_fake_loss) * 0.5 + \
+            (D_real_loss_cond + (D_real_loss_cond_wrong + D_fake_loss_cond) * 0.5) * 0.5
         # gradient penalty for wgan-gp
         if self.opt.gan_mode == 'wgangp':
             gradient_penalty, gradients = external_function.cal_gradient_penalty(netD, real, fake.detach())
@@ -262,10 +272,15 @@ class TDAnet(BaseModel):
         base_function._freeze(self.net_D, self.net_D_rec)
 
         # D loss fake
-        D_fake_g = self.net_D(self.img_g[-1])
-        self.loss_gan_g = self.GANloss(D_fake_g, True, False) * self.opt.lambda_gan
-        D_fake_rec = self.net_D(self.img_rec[-1])
-        self.loss_gan_rec = self.GANloss(D_fake_rec, True, False) * self.opt.lambda_gan
+        D_fake_feat = self.net_D(self.img_g[-1])
+        D_fake_g = self.net_D.module.get_uncond_pred(D_fake_feat)
+        D_fake_g_cond = self.net_D.module.get_cond_pred(D_fake_feat, self.sentence_embedding)
+
+        self.loss_gan_g = (self.GANloss(D_fake_g, True, False) + self.GANloss(D_fake_g_cond, True, False)) * self.opt.lambda_gan
+        D_fake_rec_feat = self.net_D(self.img_rec[-1])
+        D_fake_rec = self.net_D.module.get_uncond_pred(D_fake_rec_feat)
+        D_fake_rec_cond = self.net_D.module.get_cond_pred(D_fake_rec_feat, self.sentence_embedding)
+        self.loss_gan_rec = (self.GANloss(D_fake_rec, True, False) + self.GANloss(D_fake_rec_cond, True, False)) * self.opt.lambda_gan
 
         # LSGAN loss
         D_fake = self.net_D_rec(self.img_rec[-1])
@@ -298,7 +313,7 @@ class TDAnet(BaseModel):
 
         # calculate l1 loss ofr multi-scale, multi-depth-level outputs
         loss_l1_rec, loss_l1_g, log_PSNR_rec, log_PSNR_out = 0, 0, 0, 0
-        for i, (img_rec_i, img_fake_i, img_out_i, img_real_i, mask_i) in enumerate(zip(self.img_rec, self.img_g, self.img_out, self.scale_img, self.scale_mask)):
+        for i, (img_rec_i, img_fake_i, img_real_i, mask_i) in enumerate(zip(self.img_rec, self.img_g, self.scale_img, self.scale_mask)):
             loss_l1_rec += self.L1loss(img_rec_i, img_real_i)
             if self.opt.train_paths == "one":
                 loss_l1_g += self.L1loss(img_fake_i, img_real_i)

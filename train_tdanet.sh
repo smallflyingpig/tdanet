@@ -1,0 +1,1 @@
+python train.py -W ignore --name tda_bird  --gpu_ids 0 --model tdanet --mask_type 0 1 2 3 --img_file ./datasets/CUB_200_2011/train.flist --mask_file ./datasets/CUB_200_2011/train_mask.flist --text_config config.bird.yml

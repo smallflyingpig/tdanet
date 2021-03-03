@@ -73,13 +73,13 @@ def define_hidden_textual_g(output_nc=3, f_text_dim=384, ngf=64, z_nc=512, img_f
 
     return init_net(net, init_type, activation, gpu_ids)
 
-def define_d(input_nc=3, ndf=64, img_f=512, layers=6, norm='none', activation='LeakyReLU', use_spect=True, use_coord=False,
+def define_d(input_nc=3, ndf=64, img_f=512, c_dim=256, layers=6, norm='none', activation='LeakyReLU', use_spect=True, use_coord=False,
              use_attn=True,  model_type='ResDis', init_type='orthogonal', gpu_ids=[]):
 
     if model_type == 'ResDis':
-        net = ResDiscriminator(input_nc, ndf, img_f, layers, norm, activation, use_spect, use_coord, use_attn)
+        net = ResDiscriminator(input_nc, ndf, img_f, c_dim, layers, norm, activation, use_spect, use_coord, use_attn)
     elif model_type == 'PatchDis':
-        net = SNPatchDiscriminator(input_nc, ndf, img_f, layers, norm, activation, use_spect, use_coord, use_attn)
+        net = SNPatchDiscriminator(input_nc, ndf, img_f, c_dim, layers, norm, activation, use_spect, use_coord, use_attn)
 
     return init_net(net, init_type, activation, gpu_ids)
 
@@ -1425,6 +1425,22 @@ class TextualResGenerator(nn.Module):
 
         return results, attn
 
+
+class CondLogit(nn.Module):
+    def __init__(self, in_nc, cond_nc):
+        super(CondLogit, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_nc+cond_nc, in_nc, 3,1,1, bias=False), 
+            nn.BatchNorm2d(in_nc),
+            nn.ReLU(inplace=True))
+        self.out = SpectralNorm(nn.Conv2d(in_nc, 1, 4,1,0, bias=True))
+
+    def forward(self, x, c):
+        B, C, H, W = x.shape
+        c = c.unsqueeze(-1).unsqueeze(-1)
+        x_c = torch.cat([x, c.repeat(1,1,H,W)], dim=1)
+        return self.out(self.conv(x_c))
+
 class ResDiscriminator(nn.Module):
     """
     ResNet Discriminator Network
@@ -1435,7 +1451,7 @@ class ResDiscriminator(nn.Module):
     :param norm: normalization function 'instance, batch, group'
     :param activation: activation function 'ReLU, SELU, LeakyReLU, PReLU'
     """
-    def __init__(self, input_nc=3, ndf=64, img_f=1024, layers=6, norm='none', activation='LeakyReLU', use_spect=True,
+    def __init__(self, input_nc=3, ndf=64, img_f=1024, c_dim=256, layers=6, norm='none', activation='LeakyReLU', use_spect=True,
                  use_coord=False, use_attn=True):
         super(ResDiscriminator, self).__init__()
 
@@ -1461,7 +1477,14 @@ class ResDiscriminator(nn.Module):
             setattr(self, 'encoder' + str(i), block)
 
         self.block1 = ResBlock(ndf * mult, ndf * mult, ndf * mult, norm_layer, nonlinearity, 'none', use_spect, use_coord)
-        self.conv = SpectralNorm(nn.Conv2d(ndf * mult, 1, 3))
+        self.out = SpectralNorm(nn.Conv2d(ndf * mult, 1, 3))
+        self.cond_out = CondLogit(ndf*mult, cond_nc=c_dim)
+
+    def get_uncond_pred(self, x):
+        return self.out(self.nonlinearity(x))
+    
+    def get_cond_pred(self, x, c):
+        return self.cond_out(self.nonlinearity(x), c)
 
     def forward(self, x):
         out = self.block0(x)
@@ -1472,7 +1495,6 @@ class ResDiscriminator(nn.Module):
             model = getattr(self, 'encoder' + str(i))
             out = model(out)
         out = self.block1(out)
-        out = self.conv(self.nonlinearity(out))
         return out
 
 
@@ -1488,11 +1510,12 @@ class SNPatchDiscriminator(nn.Module):
     :param use_spect: use spectral normalization or not
     :param use_coord: use CoordConv or nor
     """
-    def __init__(self, input_nc=4, ndf=64, img_f=256, layers=6, activation='LeakyReLU',
+    def __init__(self, input_nc=4, ndf=64, img_f=256, c_dim=256, layers=6, activation='LeakyReLU',
                  use_spect=True, use_coord=False):
         super(SNPatchDiscriminator, self).__init__()
 
         nonlinearity = get_nonlinearity_layer(activation_type=activation)
+        self.nonlinearity = nonlinearity
 
         kwargs = {'kernel_size': 4, 'stride': 2, 'padding': 1, 'bias': False}
         sequence = [
@@ -1510,6 +1533,14 @@ class SNPatchDiscriminator(nn.Module):
                 ]
 
         self.model = nn.Sequential(*sequence)
+        self.cond_out = CondLogit(ndf*mult, c_dim)
+        self.out = SpectralNorm(nn.Conv2d(ndf * mult, 1, 3))
+
+    def get_uncond_pred(self, x):
+        return self.out(self.nonlinearity(x))
+    
+    def get_cond_pred(self, x, c):
+        return self.cond_out(self.nonlinearity(x), c)
 
     def forward(self, x):
         out = self.model(x)
